@@ -2,9 +2,9 @@ import pandas as pd
 import tkinter as tk
 from tkinter import ttk
 import threading
-from functools import lru_cache
 import ctypes
-import time
+from icecream import ic
+import os
 
 # Load the shared library into ctypes
 functions_lib = ctypes.CDLL('./shared/functions.dll')
@@ -23,9 +23,9 @@ class CommunePredictorApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Charger les données
-        self.df_France = self.load_communes_data('./communes/Communes_France.csv')
-        self.df_Allemange = self.load_communes_data('./communes/Communes_Allemagne.csv')
-        self.df_Suisse = self.load_communes_data('./communes/Communes_Suisse.csv')
+        self.df_France = self.load_communes_data('./communes/France.csv')
+        self.df_Allemange = self.load_communes_data('./communes/Allemagne.csv')
+        self.df_Suisse = self.load_communes_data('./communes/Suisse.csv')
         
         # Variables for checkboxes
         self.france_var = tk.BooleanVar(value=True)
@@ -35,7 +35,8 @@ class CommunePredictorApp:
         # Variables for pagination
         self.results_per_page = 10
         self.current_page = 0
-        self.results = pd.DataFrame()
+        self.results = pd.DataFrame(columns = ['Pays', 'nom_standard', 'dep_code'])
+        self.sort_order = True
         
         self.correction_var = tk.BooleanVar()
         
@@ -49,7 +50,7 @@ class CommunePredictorApp:
         self.create_widgets()
         
         # Initialize the combined dataframe
-        self.df = pd.DataFrame(columns=['nom_standard', 'nom_sans_accent', 'nom_standard_majuscule', 'dep_code'])
+        self.df = pd.DataFrame(columns=['Pays', 'nom_standard', 'nom_sans_accent', 'nom_standard_majuscule', 'dep_code'])
         
         # Combine the dataframes into one if checkboxes are checked
         self.update_combined_df()
@@ -58,14 +59,26 @@ class CommunePredictorApp:
     def load_communes_data(self, filepath: str) -> pd.DataFrame:
         # Pays,nom_standard,nom_sans_accent,nom_standard_majuscule,dep_code,nom_standard
         dtype = {
-            'Pays': str, 'nom_standard': str, 'nom_sans_accent': str, 'nom_standard_majuscule': str, 'dep_code': str
+            'Pays': str,
+            'nom_standard': str,
+            'nom_sans_accent': str,
+            'nom_standard_majuscule': str,
+            'dep_code': str
         }
-        return pd.read_csv(filepath, index_col=0, dtype=dtype)
+        
+        df = pd.DataFrame(columns=['Pays', 'nom_standard', 'nom_sans_accent', 'nom_standard_majuscule', 'dep_code'])
+        if os.path.exists(filepath):
+            read = pd.read_csv(filepath, dtype=dtype)
+            ic(read.columns)
+            df = pd.concat([df, read], ignore_index=True)  # ensure index is reset
+        else:
+            ic(f"File not found: {filepath}")
+        return df
 
-    @lru_cache(maxsize=None)
     def correction(self, query, min_distance, max_suggestions) -> pd.DataFrame:
         names = self.df['nom_standard'].values
         dep_codes = self.df['dep_code'].values
+        pays = self.df['Pays'].values
         names_count = len(names)
         
         # Convert names to ctypes array
@@ -79,19 +92,21 @@ class CommunePredictorApp:
         results = []
         for i in range(names_count):
             if distances[i] < min_distance:
-                results.append((distances[i], names[i], dep_codes[i]))
+                results.append((pays[i], distances[i], names[i], dep_codes[i]))
         
-        additional_results_df = pd.DataFrame(results, columns=['distance', 'nom_standard', 'dep_code'])
+        additional_results_df = pd.DataFrame(results, columns=['Pays', 'distance', 'nom_standard', 'dep_code'])
         additional_results_df = additional_results_df.nsmallest(max_suggestions, 'distance')
-        return additional_results_df[['nom_standard', 'dep_code']]
+        return additional_results_df[['Pays', 'nom_standard', 'dep_code']]
 
     def filter_df(self, query, search_type) -> pd.DataFrame:
+        pays = self.df['Pays'].values
         names = self.df['nom_standard'].values
         names_sans_accent = self.df['nom_sans_accent'].values
         names_majuscule = self.df['nom_standard_majuscule'].values
         names_count = len(names)
         
         # Convert names to ctypes array
+        
         names_ctypes = (ctypes.c_char_p * names_count)(*map(lambda x: x.encode('utf-8'), names))
         names_sans_accent_ctypes = (ctypes.c_char_p * names_count)(*map(lambda x: x.encode('utf-8'), names_sans_accent))
         names_majuscule_ctypes = (ctypes.c_char_p * names_count)(*map(lambda x: x.encode('utf-8'), names_majuscule))
@@ -103,6 +118,7 @@ class CommunePredictorApp:
         # Collect results
         filtered_indices = [i for i in range(names_count) if results[i] == 1]
         filtered_df = self.df.iloc[filtered_indices]
+        
         return filtered_df
     
     def on_key_release(self):
@@ -113,54 +129,53 @@ class CommunePredictorApp:
             self.update_suggestions()
         
     def create_widgets(self) -> None:
-        # Zone de texte pour la recherche
+        # Row 0
+        row = 0
         self.entry_var = tk.StringVar()
-        self.entry = ttk.Entry(self.root, textvariable=self.entry_var, width=40)
-        self.entry.grid(row=0, column=0, padx=10, pady=10)
+        self.entry = ttk.Entry(self.root, textvariable=self.entry_var, width=60)
+        self.entry.grid(row=row, column=0, columnspan=4, padx=10, pady=10, sticky="ew")
         self.previous_query = ""
         self.entry.bind("<KeyRelease>", lambda event: self.on_key_release())
-
-
-        # Option menu for search type
+        
+        # Row 1
+        row = 1
         self.search_type_var = tk.StringVar(value="Contenant")
         search_type_menu = ttk.OptionMenu(self.root, self.search_type_var, "Contenant", "Commencant par", "Finissant par", "Contenant", command=self.update_suggestions)
-        search_type_menu.grid(row=0, column=1, padx=10, pady=10)
+        search_type_menu.grid(row=row, column=0, padx=10, pady=10)
 
         sort_types = ["Nom", "Longueur", "Département"]
-
-        # Option menu for sort type
         self.sort_type_var = tk.StringVar(value="Nom (A-Z)")
         sort_type_menu = ttk.OptionMenu(self.root, self.sort_type_var, *sort_types, command=self.update_suggestions)
-        sort_type_menu.grid(row=0, column=2, padx=10, pady=10)
+        sort_type_menu.grid(row=row, column=1, padx=10, pady=10)
 
-        # Button for sorting
-        self.sort_order = True
         self.sort_button = tk.Button(self.root, text="↑", command=self.toggle_sort_order)
-        self.sort_button.grid(row=0, column=8, padx=5, pady=10)
-
-        # Correction checkbox
+        self.sort_button.grid(row=row, column=2, padx=5, pady=10)
+        
+        # Row 2
+        row = 2
         self.correction_checkbutton = ttk.Checkbutton(self.root, text="Correction", variable=self.correction_var, command=self.update_suggestions)
-        self.correction_checkbutton.grid(row=0, column=3, padx=10, pady=10)
+        self.correction_checkbutton.grid(row=row, column=0, padx=10, pady=10)
 
-        # Checkboxes for selecting dataframes
         self.france_checkbutton = ttk.Checkbutton(self.root, text="France", variable=self.france_var, command=self.update_combined_df)
-        self.france_checkbutton.grid(row=0, column=4, padx=10, pady=10)
-        
-        self.allemagne_checkbutton = ttk.Checkbutton(self.root, text="Allemagne", variable=self.allemagne_var, command=self.update_combined_df)
-        self.allemagne_checkbutton.grid(row=0, column=5, padx=10, pady=10)
-        
-        self.suisse_checkbutton = ttk.Checkbutton(self.root, text="Suisse", variable=self.suisse_var, command=self.update_combined_df)
-        self.suisse_checkbutton.grid(row=0, column=6, padx=10, pady=10)
+        self.france_checkbutton.grid(row=row, column=1, padx=10, pady=10)
 
-        # Cadre pour les suggestions avec une zone scrollable
+        self.allemagne_checkbutton = ttk.Checkbutton(self.root, text="Allemagne", variable=self.allemagne_var, command=self.update_combined_df)
+        self.allemagne_checkbutton.grid(row=row, column=2, padx=10, pady=10)
+
+        self.suisse_checkbutton = ttk.Checkbutton(self.root, text="Suisse", variable=self.suisse_var, command=self.update_combined_df)
+        self.suisse_checkbutton.grid(row=row, column=3, padx=10, pady=10)
+
+        
+        # Row 3
+        row = 3
         suggestions_frame_container = tk.Frame(self.root)
-        suggestions_frame_container.grid(row=1, column=0, columnspan=3, padx=10, pady=5, sticky="nsew")
+        suggestions_frame_container.grid(row=row, column=0, columnspan=3, padx=10, pady=5, sticky="nsew")
 
         canvas = tk.Canvas(suggestions_frame_container)
         scrollbar = ttk.Scrollbar(suggestions_frame_container, orient="vertical", command=canvas.yview)
         self.suggestions_canvas_frame = tk.Frame(canvas)
 
-        self.suggestions_canvas_frame.bind("<Configure>",      lambda e:     canvas.configure(scrollregion=canvas.bbox("all")))
+        self.suggestions_canvas_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
 
         canvas.create_window((0, 0), window=self.suggestions_canvas_frame, anchor="nw")
@@ -169,19 +184,24 @@ class CommunePredictorApp:
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Bind the mousewheel to scroll the canvas
+        # Row 4
+        row = 4
+        self.rowletters = row
 
-        # Cadre pour les boutons de lettres
-        self.letter_buttons_frame = tk.Frame(self.root)
-        self.letter_buttons_frame.grid(row=3, column=0, columnspan=2, pady=5)
-
-        # Label pour afficher le nombre de résultats
+        # Row 5
+        row = 5
         self.results_count_label = tk.Label(self.root, text="Page 0/0 Résultats: 0")
-        self.results_count_label.grid(row=2, column=0, columnspan=2, pady=5)
+        self.results_count_label.grid(row=row, column=0, columnspan=2, pady=5)
 
-        # Pagination controls
+        # Row 6
+        row = 6
+        self.letter_buttons_frame = tk.Frame(self.root)
+        self.letter_buttons_frame.grid(row=row, column=0, columnspan=2, pady=5)
+
+        # Row 7
+        row = 7
         pagination_frame = tk.Frame(self.root)
-        pagination_frame.grid(row=4, column=0, columnspan=2, pady=5)
+        pagination_frame.grid(row=row, column=0, columnspan=2, pady=5)
 
         self.prev_page_button = tk.Button(pagination_frame, text="<-", command=self.prev_page)
         self.prev_page_button.pack(side=tk.LEFT, padx=5)
@@ -201,21 +221,22 @@ class CommunePredictorApp:
         self.entry.focus_set()
     
     def search_communes(self, query: str, search_type: str) -> pd.DataFrame:
+        ic(self.df)
         filtered_df = self.filter_df(query, search_type)
         if self.correction_var.get():
             additional_results_df = self.correction(query, self.min_distance, self.max_suggestions)
             filtered_df = pd.concat([filtered_df, additional_results_df])
                 
-        return filtered_df[['nom_standard', 'dep_code']]
+        return filtered_df[['Pays', 'nom_standard', 'dep_code']]
 
     def sort_results(self, results: pd.DataFrame) -> pd.DataFrame:
         sort_type = self.sort_type_var.get()
         if (sort_type == "Nom"):
-            results = results.sort_values(by='nom_standard', ascending = self.sort_order)
+            results = results.sort_values(by='nom_standard', ascending=self.sort_order)
         elif (sort_type == "Longueur"):
-            results = results.assign(length=results['nom_standard'].str.len()).sort_values(by='length', ascending = self.sort_order).drop(columns='length')
+            results = results.assign(length=results['nom_standard'].str.len()).sort_values(by='length', ascending=self.sort_order).drop(columns='length')
         elif (sort_type == "Département"):
-            results = results.sort_values(by='dep_code', ascending = self.sort_order)
+            results = results.sort_values(by='dep_code', ascending=self.sort_order)
         return results
 
     def update_suggestions(self, event=None) -> None:
@@ -227,6 +248,7 @@ class CommunePredictorApp:
 
     def _update_suggestions_thread(self, query: str, search_type: str, cancel_event: threading.Event) -> None:
         self.results = self.search_communes(query, search_type)
+        ic(self.results)
         if cancel_event.is_set():
             return
         self.results = self.results.drop_duplicates(subset=['nom_standard'])
@@ -246,7 +268,7 @@ class CommunePredictorApp:
         if selected_dfs:
             self.df = pd.concat(selected_dfs)
         else:
-            self.df = pd.DataFrame(columns=['nom_standard', 'nom_sans_accent', 'nom_standard_majuscule', 'dep_code'])
+            self.df = pd.DataFrame(columns=['Pays', 'nom_standard', 'nom_sans_accent', 'nom_standard_majuscule', 'dep_code'])
         
         self.update_suggestions()
     
@@ -293,12 +315,15 @@ class CommunePredictorApp:
         for _, row in self.results.iloc[start_idx:end_idx].iterrows():
             name = row['nom_standard']
             depcode = row['dep_code']
+            pays = row['Pays']
             row_frame = tk.Frame(self.suggestions_canvas_frame)
             row_frame.pack(fill=tk.X, padx=5, pady=2)
 
             copy_button = tk.Button(row_frame, text="Copier", command=lambda n=name: self.copy_to_clipboard(n))
-            copy_button.pack(side=tk.LEFT)
+            copy_button.pack(side=tk.RIGHT)
             label = tk.Label(row_frame, text=" ", anchor='w')
+            label.pack(side=tk.LEFT)
+            label = tk.Label(row_frame, text=pays, anchor='w', width=9)
             label.pack(side=tk.LEFT)
             label = tk.Label(row_frame, text=depcode, anchor='w', width=3)
             label.pack(side=tk.LEFT)
@@ -318,7 +343,7 @@ class CommunePredictorApp:
     def update_next_letters(self, query: str) -> None:
         self.letter_buttons_frame.destroy()
         self.letter_buttons_frame = tk.Frame(self.root)
-        self.letter_buttons_frame.grid(row=3, column=0, columnspan=2, pady=5)
+        self.letter_buttons_frame.grid(row=self.rowletters, column=0, columnspan=2, pady=5)
 
         if not query:
             return
@@ -338,6 +363,7 @@ class CommunePredictorApp:
     def append_letter(self, letter: str) -> None:
         current_text = self.entry_var.get()
         self.entry_var.set(current_text + letter)
+        self.entry.icursor(len(current_text) + 1)
         self.update_suggestions()
     
     def on_closing(self):
