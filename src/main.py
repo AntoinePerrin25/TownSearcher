@@ -3,7 +3,6 @@ import tkinter as tk
 from tkinter import ttk
 import threading
 import ctypes
-from icecream import ic
 import os
 
 # Load the shared library into ctypes
@@ -69,10 +68,9 @@ class CommunePredictorApp:
         df = pd.DataFrame(columns=['Pays', 'nom_standard', 'nom_sans_accent', 'nom_standard_majuscule', 'dep_code'])
         if os.path.exists(filepath):
             read = pd.read_csv(filepath, dtype=dtype)
-            ic(read.columns)
             df = pd.concat([df, read], ignore_index=True)  # ensure index is reset
         else:
-            ic(f"File not found: {filepath}")
+            print(f"File not found: {filepath}")
         return df
 
     def correction(self, query, min_distance, max_suggestions) -> pd.DataFrame:
@@ -221,7 +219,6 @@ class CommunePredictorApp:
         self.entry.focus_set()
     
     def search_communes(self, query: str, search_type: str) -> pd.DataFrame:
-        ic(self.df)
         filtered_df = self.filter_df(query, search_type)
         if self.correction_var.get():
             additional_results_df = self.correction(query, self.min_distance, self.max_suggestions)
@@ -248,7 +245,6 @@ class CommunePredictorApp:
 
     def _update_suggestions_thread(self, query: str, search_type: str, cancel_event: threading.Event) -> None:
         self.results = self.search_communes(query, search_type)
-        ic(self.results)
         if cancel_event.is_set():
             return
         self.results = self.results.drop_duplicates(subset=['nom_standard'])
