@@ -6,6 +6,8 @@ import ctypes
 import os
 from icecream import ic
 import platform
+#import cProfile
+
 
 # Load the shared library into ctypes
 if platform.system() == "Windows":
@@ -102,7 +104,6 @@ class CommunePredictorApp:
         return additional_results_df[['Pays', 'nom_standard', 'dep_code']]
 
     def filter_df(self, query, search_type) -> pd.DataFrame:
-        pays = self.df['Pays'].values
         names = self.df['nom_standard'].values
         names_sans_accent = self.df['nom_sans_accent'].values
         names_majuscule = self.df['nom_standard_majuscule'].values
@@ -390,6 +391,8 @@ class CommunePredictorApp:
         self.cancel_event.set()
         self.root.destroy()
 
+
+#def main():
 if __name__ == "__main__":
     root = tk.Tk()
     app = CommunePredictorApp(root)
