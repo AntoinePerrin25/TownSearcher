@@ -48,7 +48,24 @@ size_t levenshtein(const char *a, const char *b) {
   return levenshtein_n(a, length, b, bLength);
 }
 
-void calculate_distances(const char **names, size_t names_count, const char *query, size_t *distances) {
+void calculate_distances(const char **names, size_t names_count, const char *query, size_t *distances, size_t min_distance, size_t max_suggestions) {
+    size_t *temp_distances = malloc(names_count * sizeof(size_t));
+    size_t suggestions_count = 0;
+
+    for (size_t i = 0; i < names_count; i++) {
+        temp_distances[i] = levenshtein(names[i], query);
+    }
+
+    for (size_t i = 0; i < names_count; i++) {
+        if (temp_distances[i] < min_distance && suggestions_count < max_suggestions) {
+            distances[suggestions_count++] = temp_distances[i];
+        }
+    }
+
+    free(temp_distances);
+}
+
+void calculate_final_distances(const char **names, size_t names_count, const char *query, size_t *distances) {
     for (size_t i = 0; i < names_count; i++) {
         distances[i] = levenshtein(names[i], query);
     }

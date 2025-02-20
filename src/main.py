@@ -4,22 +4,31 @@ from tkinter import ttk
 import threading
 import ctypes
 import os
+from icecream import ic
+import platform
 
 # Load the shared library into ctypes
-functions_lib = ctypes.CDLL('./shared/functions.dll')
+if platform.system() == "Windows":
+    functions_lib = ctypes.CDLL('./shared/functions.dll')
+else:  # Unix-like systems
+    functions_lib = ctypes.CDLL('./shared/functions.so')
 
 # Define the argument and return types for the C functions
-functions_lib.calculate_distances.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t)]
+functions_lib.calculate_distances.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t), ctypes.c_size_t, ctypes.c_size_t]
 functions_lib.calculate_distances.restype = None
 
 functions_lib.filter_df.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
 functions_lib.filter_df.restype = None
 
+functions_lib.calculate_final_distances.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t)]
+functions_lib.calculate_final_distances.restype = None
+
 class CommunePredictorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Recherche de Communes avec Prédiction")
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        if self.root is not None:
+            self.root.title("Recherche de Communes avec Prédiction")
+            self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Charger les données
         self.df_France = self.load_communes_data('./communes/France.csv')
@@ -81,19 +90,15 @@ class CommunePredictorApp:
         
         # Convert names to ctypes array
         names_ctypes = (ctypes.c_char_p * names_count)(*map(lambda x: x.encode('utf-8'), names))
-        distances = (ctypes.c_size_t * names_count)()
+        distances = (ctypes.c_size_t * max_suggestions)()
         
         # Call the C function
-        functions_lib.calculate_distances(names_ctypes, names_count, query.encode('utf-8'), distances)
-        
+        functions_lib.calculate_distances(names_ctypes, names_count, query.encode('utf-8'), distances, min_distance, max_suggestions)
         # Collect results
         results = []
-        for i in range(names_count):
-            if distances[i] < min_distance:
-                results.append((pays[i], distances[i], names[i], dep_codes[i]))
-        
-        additional_results_df = pd.DataFrame(results, columns=['Pays', 'distance', 'nom_standard', 'dep_code'])
-        additional_results_df = additional_results_df.nsmallest(max_suggestions, 'distance')
+        for i in range(max_suggestions):
+                results.append((pays[i], names[i], dep_codes[i]))
+        additional_results_df = pd.DataFrame(results, columns=['Pays', 'nom_standard', 'dep_code'])
         return additional_results_df[['Pays', 'nom_standard', 'dep_code']]
 
     def filter_df(self, query, search_type) -> pd.DataFrame:
@@ -141,7 +146,7 @@ class CommunePredictorApp:
         search_type_menu = ttk.OptionMenu(self.root, self.search_type_var, "Contenant", "Commencant par", "Finissant par", "Contenant", command=self.update_suggestions)
         search_type_menu.grid(row=row, column=0, padx=10, pady=10)
 
-        sort_types = ["Nom", "Longueur", "Département"]
+        sort_types = ["Nom", "Longueur", "Département", "Distance"]
         self.sort_type_var = tk.StringVar(value="Nom (A-Z)")
         sort_type_menu = ttk.OptionMenu(self.root, self.sort_type_var, *sort_types, command=self.update_suggestions)
         sort_type_menu.grid(row=row, column=1, padx=10, pady=10)
@@ -228,11 +233,13 @@ class CommunePredictorApp:
 
     def sort_results(self, results: pd.DataFrame) -> pd.DataFrame:
         sort_type = self.sort_type_var.get()
-        if (sort_type == "Nom"):
+        if sort_type == "Distance":
+            return results.sort_values(by='distance', ascending=self.sort_order)
+        elif sort_type == "Nom":
             results = results.sort_values(by='nom_standard', ascending=self.sort_order)
-        elif (sort_type == "Longueur"):
+        elif sort_type == "Longueur":
             results = results.assign(length=results['nom_standard'].str.len()).sort_values(by='length', ascending=self.sort_order).drop(columns='length')
-        elif (sort_type == "Département"):
+        elif sort_type == "Département":
             results = results.sort_values(by='dep_code', ascending=self.sort_order)
         return results
 
@@ -247,6 +254,19 @@ class CommunePredictorApp:
         self.results = self.search_communes(query, search_type)
         if cancel_event.is_set():
             return
+        
+        # Calculate distances for final results
+        names_count = len(self.results)
+        if names_count > 0:
+            names = self.results['nom_standard'].values
+            names_ctypes = (ctypes.c_char_p * names_count)(*map(lambda x: x.encode('utf-8'), names))
+            distances = (ctypes.c_size_t * names_count)()
+            
+            functions_lib.calculate_final_distances(names_ctypes, names_count, query.encode('utf-8'), distances)
+            
+            # Add distances to dataframe
+            self.results['distance'] = list(distances)
+        
         self.results = self.results.drop_duplicates(subset=['nom_standard'])
         self.results = self.sort_results(self.results)
         self.current_page = 0
@@ -312,11 +332,15 @@ class CommunePredictorApp:
             name = row['nom_standard']
             depcode = row['dep_code']
             pays = row['Pays']
+            distance = row['distance'] if 'distance' in row else ''
+            
             row_frame = tk.Frame(self.suggestions_canvas_frame)
             row_frame.pack(fill=tk.X, padx=5, pady=2)
 
             copy_button = tk.Button(row_frame, text="Copier", command=lambda n=name: self.copy_to_clipboard(n))
             copy_button.pack(side=tk.RIGHT)
+            label = tk.Label(row_frame, text=f"({distance})" if distance != '' else " ", anchor='w', width=5)
+            label.pack(side=tk.RIGHT)
             label = tk.Label(row_frame, text=" ", anchor='w')
             label.pack(side=tk.LEFT)
             label = tk.Label(row_frame, text=pays, anchor='w', width=9)
