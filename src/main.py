@@ -4,9 +4,8 @@ from tkinter import ttk
 import threading
 import ctypes
 import os
-from icecream import ic
 import platform
-#import cProfile
+from icecream import ic
 
 
 # Load the shared library into ctypes
@@ -258,6 +257,7 @@ class CommunePredictorApp:
         
         # Calculate distances for final results
         names_count = len(self.results)
+        #ic("Initial results :", self.results)
         if names_count > 0:
             names = self.results['nom_standard'].values
             names_ctypes = (ctypes.c_char_p * names_count)(*map(lambda x: x.encode('utf-8'), names))
@@ -267,7 +267,7 @@ class CommunePredictorApp:
             
             # Add distances to dataframe
             self.results['distance'] = list(distances)
-        
+        #ic("Updated results after adding distances:", self.results)
         self.results = self.results.drop_duplicates(subset=['nom_standard'])
         self.results = self.sort_results(self.results)
         self.current_page = 0
