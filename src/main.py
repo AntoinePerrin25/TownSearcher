@@ -5,24 +5,82 @@ import threading
 import ctypes
 import os
 import platform
+import time
 from icecream import ic
 
+# Check if we should use CUDA
+use_cuda = os.environ.get("USE_CUDA", "0") == "1"
 
 # Load the shared library into ctypes
 if platform.system() == "Windows":
-    functions_lib = ctypes.CDLL('./shared/functions.dll')
+    if use_cuda:
+        try:
+            functions_lib = ctypes.CDLL('./shared/functions_cuda.dll')
+            print("Using CUDA acceleration!")
+        except OSError:
+            functions_lib = ctypes.CDLL('./shared/functions.dll')
+            use_cuda = False
+            print("Falling back to CPU implementation.")
+    else:
+        functions_lib = ctypes.CDLL('./shared/functions.dll')
 else:  # Unix-like systems
-    functions_lib = ctypes.CDLL('./shared/functions.so')
+    if use_cuda:
+        try:
+            functions_lib = ctypes.CDLL('./shared/functions_cuda.so')
+            print("Using CUDA acceleration!")
+        except OSError:
+            functions_lib = ctypes.CDLL('./shared/functions.so')
+            use_cuda = False
+            print("Falling back to CPU implementation.")
+    else:
+        functions_lib = ctypes.CDLL('./shared/functions.so')
+
+# CUDA debug information
+cuda_info = {
+    "enabled": use_cuda,
+    "device": "Unknown",
+    "last_operation_time": 0,
+    "total_operations": 0,
+    "avg_operation_time": 0
+}
+
+# Try to get CUDA device information if CUDA is enabled
+if use_cuda:
+    try:
+        # Using subprocess to call nvidia-smi
+        import subprocess
+        result = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total,driver_version', '--format=csv,noheader'],
+                              capture_output=True, text=True)
+        if result.returncode == 0:
+            cuda_info["device"] = result.stdout.strip()
+        else:
+            cuda_info["device"] = "CUDA device information unavailable"
+    except Exception as e:
+        cuda_info["device"] = f"Error getting CUDA device info: {str(e)}"
+    
+    print(f"CUDA Device: {cuda_info['device']}")
 
 # Define the argument and return types for the C functions
-functions_lib.calculate_distances.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t), ctypes.c_size_t, ctypes.c_size_t]
-functions_lib.calculate_distances.restype = None
-
-functions_lib.filter_df.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
-functions_lib.filter_df.restype = None
-
-functions_lib.calculate_final_distances.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t)]
-functions_lib.calculate_final_distances.restype = None
+if use_cuda:
+    # CUDA functions
+    functions_lib.cuda_calculate_distances.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t), ctypes.c_size_t, ctypes.c_size_t]
+    functions_lib.cuda_calculate_distances.restype = None
+    
+    functions_lib.cuda_filter_df.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
+    functions_lib.cuda_filter_df.restype = None
+    
+    functions_lib.cuda_calculate_final_distances.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t)]
+    functions_lib.cuda_calculate_final_distances.restype = None
+else:
+    # CPU functions
+    functions_lib.calculate_distances.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t), ctypes.c_size_t, ctypes.c_size_t]
+    functions_lib.calculate_distances.restype = None
+    
+    functions_lib.filter_df.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p), ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
+    functions_lib.filter_df.restype = None
+    
+    functions_lib.calculate_final_distances.argtypes = [ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t, ctypes.c_char_p, ctypes.POINTER(ctypes.c_size_t)]
+    functions_lib.calculate_final_distances.restype = None
 
 class CommunePredictorApp:
     def __init__(self, root):
@@ -55,6 +113,16 @@ class CommunePredictorApp:
         # Event to cancel ongoing calculations
         self.cancel_event = threading.Event()
         
+        # Add debug mode variable
+        self.debug_var = tk.BooleanVar(value=False)
+        
+        # Add performance tracking
+        self.perf_metrics = {
+            "filter_time": 0,
+            "distance_calc_time": 0,
+            "total_operations": 0
+        }
+        
         # Interface graphique
         self.create_widgets()
         
@@ -63,6 +131,10 @@ class CommunePredictorApp:
         
         # Combine the dataframes into one if checkboxes are checked
         self.update_combined_df()
+        
+        # Show CUDA status
+        if use_cuda:
+            self.show_cuda_info()
 
     
     def load_communes_data(self, filepath: str) -> pd.DataFrame:
@@ -91,10 +163,31 @@ class CommunePredictorApp:
         
         # Convert names to ctypes array
         names_ctypes = (ctypes.c_char_p * names_count)(*map(lambda x: x.encode('utf-8'), names))
-        distances = (ctypes.c_size_t * names_count)()  # Change to store all distances
+        distances = (ctypes.c_size_t * names_count)()
         
-        # Call the C function - modify to calculate distances for all names
-        functions_lib.calculate_final_distances(names_ctypes, names_count, query.encode('utf-8'), distances)
+        # Call the appropriate function (CUDA or CPU) with timing
+        start_time = time.time()
+        if use_cuda:
+            functions_lib.cuda_calculate_final_distances(names_ctypes, names_count, query.encode('utf-8'), distances)
+        else:
+            functions_lib.calculate_final_distances(names_ctypes, names_count, query.encode('utf-8'), distances)
+        elapsed = time.time() - start_time
+        
+        # Update performance metrics
+        self.perf_metrics["distance_calc_time"] = elapsed
+        self.perf_metrics["total_operations"] += 1
+        
+        if use_cuda:
+            cuda_info["last_operation_time"] = elapsed
+            cuda_info["total_operations"] += 1
+            cuda_info["avg_operation_time"] = ((cuda_info["avg_operation_time"] * 
+                                             (cuda_info["total_operations"] - 1)) + 
+                                             elapsed) / cuda_info["total_operations"]
+        
+        if self.debug_var.get():
+            print(f"Distance calculation completed in {elapsed:.4f} seconds for {names_count} names")
+            if use_cuda:
+                print(f"CUDA avg operation time: {cuda_info['avg_operation_time']:.4f} seconds")
         
         # Create a list of tuples (distance, pays, name, dep_code)
         distance_items = [(distances[i], pays[i], names[i], dep_codes[i]) for i in range(names_count)]
@@ -122,8 +215,29 @@ class CommunePredictorApp:
         names_majuscule_ctypes = (ctypes.c_char_p * names_count)(*map(lambda x: x.encode('utf-8'), names_majuscule))
         results = (ctypes.c_int * names_count)()
         
-        # Call the C function
-        functions_lib.filter_df(names_ctypes, names_sans_accent_ctypes, names_majuscule_ctypes, names_count, query.encode('utf-8'), search_type.encode('utf-8'), results)
+        # Call the appropriate function (CUDA or CPU) with timing
+        start_time = time.time()
+        if use_cuda:
+            functions_lib.cuda_filter_df(names_ctypes, names_sans_accent_ctypes, names_majuscule_ctypes, names_count, query.encode('utf-8'), search_type.encode('utf-8'), results)
+        else:
+            functions_lib.filter_df(names_ctypes, names_sans_accent_ctypes, names_majuscule_ctypes, names_count, query.encode('utf-8'), search_type.encode('utf-8'), results)
+        elapsed = time.time() - start_time
+        
+        # Update performance metrics
+        self.perf_metrics["filter_time"] = elapsed
+        self.perf_metrics["total_operations"] += 1
+        
+        if use_cuda:
+            cuda_info["last_operation_time"] = elapsed
+            cuda_info["total_operations"] += 1
+            cuda_info["avg_operation_time"] = ((cuda_info["avg_operation_time"] * 
+                                             (cuda_info["total_operations"] - 1)) + 
+                                             elapsed) / cuda_info["total_operations"]
+        
+        if self.debug_var.get():
+            print(f"Filter operation completed in {elapsed:.4f} seconds for {names_count} names")
+            if use_cuda:
+                print(f"CUDA avg operation time: {cuda_info['avg_operation_time']:.4f} seconds")
         
         # Collect results
         filtered_indices = [i for i in range(names_count) if results[i] == 1]
@@ -196,6 +310,20 @@ class CommunePredictorApp:
                                             variable=self.suisse_var, 
                                             command=self.update_combined_df)
         self.suisse_checkbutton.pack(side=tk.LEFT, padx=10)
+        
+        # After the checkboxes for countries, add debug mode checkbox
+        tk.Label(checkboxes_frame, text=" | ").pack(side=tk.LEFT)
+        
+        # Add debug checkbox
+        self.debug_checkbutton = ttk.Checkbutton(checkboxes_frame, text="Debug", 
+                                              variable=self.debug_var)
+        self.debug_checkbutton.pack(side=tk.LEFT, padx=10)
+        
+        # Add CUDA info button if CUDA is available
+        if use_cuda:
+            self.cuda_info_button = tk.Button(checkboxes_frame, text="CUDA Info", 
+                                           command=self.show_cuda_info)
+            self.cuda_info_button.pack(side=tk.LEFT, padx=5)
         
         # Row 3 - Suggestions area (expandable)
         row = 3
@@ -278,27 +406,43 @@ class CommunePredictorApp:
         threading.Thread(target=self._update_suggestions_thread, args=(query, search_type, self.cancel_event)).start()
 
     def _update_suggestions_thread(self, query: str, search_type: str, cancel_event: threading.Event) -> None:
+        start_time = time.time()
         self.results = self.search_communes(query, search_type)
         if cancel_event.is_set():
             return
         
         # Calculate distances for final results
         names_count = len(self.results)
-        #ic("Initial results :", self.results)
         if names_count > 0:
             names = self.results['nom_standard'].values
             names_ctypes = (ctypes.c_char_p * names_count)(*map(lambda x: x.encode('utf-8'), names))
             distances = (ctypes.c_size_t * names_count)()
             
-            functions_lib.calculate_final_distances(names_ctypes, names_count, query.encode('utf-8'), distances)
+            # Call the appropriate function (CUDA or CPU)
+            dist_start = time.time()
+            if use_cuda:
+                functions_lib.cuda_calculate_final_distances(names_ctypes, names_count, query.encode('utf-8'), distances)
+            else:
+                functions_lib.calculate_final_distances(names_ctypes, names_count, query.encode('utf-8'), distances)
+            dist_time = time.time() - dist_start
             
             # Add distances to dataframe
             self.results['distance'] = list(distances)
-        #ic("Updated results after adding distances:", self.results)
+            
+            if self.debug_var.get():
+                print(f"Final distance calculation: {dist_time:.4f}s for {names_count} results")
+        
         self.results = self.results.drop_duplicates(subset=['nom_standard'])
         self.results = self.sort_results(self.results)
         self.current_page = 0
-        self.root.after(0, self.display_results)
+        
+        total_time = time.time() - start_time
+        if self.debug_var.get():
+            mode = "CUDA" if use_cuda else "CPU"
+            print(f"[{mode}] Total suggestion update: {total_time:.4f}s")
+            print(f"Filter: {self.perf_metrics['filter_time']:.4f}s, Distance: {self.perf_metrics['distance_calc_time']:.4f}s")
+        
+        self.root.after(0, lambda: self.display_results(total_time))
     
     def update_combined_df(self) -> None:
         selected_dfs = []
@@ -344,7 +488,7 @@ class CommunePredictorApp:
             self.sort_button.config(text="↑")
         self.update_suggestions()
     
-    def display_results(self) -> None:
+    def display_results(self, total_time=None) -> None:
         if self.results.empty:
             self.results_count_label.config(text="Page 0/0 Résultats: 0")
             for widget in self.suggestions_canvas_frame.winfo_children():
@@ -382,6 +526,31 @@ class CommunePredictorApp:
         self.results_count_label.config(text=f"Page {self.current_page+1}/{total_pages} Résultats: {len(self.results)}")
 
         self.update_next_letters(self.entry_var.get().strip())
+        
+        # Display performance info if debug is enabled and we have timing info
+        if self.debug_var.get() and total_time is not None:
+            # Add performance info at the top
+            perf_frame = tk.Frame(self.suggestions_canvas_frame, bg="#f0f0f0")
+            perf_frame.pack(fill=tk.X, padx=5, pady=5)
+            
+            mode = "CUDA" if use_cuda else "CPU"
+            perf_label = tk.Label(
+                perf_frame, 
+                text=f"[{mode}] Process time: {total_time:.4f}s | "
+                     f"Filter: {self.perf_metrics['filter_time']:.4f}s | "
+                     f"Distance calc: {self.perf_metrics['distance_calc_time']:.4f}s",
+                bg="#f0f0f0", fg="#333333"
+            )
+            perf_label.pack(fill=tk.X)
+            
+            if use_cuda:
+                cuda_label = tk.Label(
+                    perf_frame,
+                    text=f"CUDA avg time: {cuda_info['avg_operation_time']:.4f}s | "
+                         f"Total ops: {cuda_info['total_operations']}",
+                    bg="#f0f0f0", fg="#333333"
+                )
+                cuda_label.pack(fill=tk.X)
 
     def copy_to_clipboard(self, text: str) -> None:
         self.root.clipboard_clear()
@@ -417,6 +586,35 @@ class CommunePredictorApp:
     def on_closing(self):
         self.cancel_event.set()
         self.root.destroy()
+
+    def show_cuda_info(self):
+        """Display CUDA information in a popup window"""
+        info_window = tk.Toplevel(self.root)
+        info_window.title("CUDA Information")
+        info_window.geometry("600x400")
+        
+        # Add text widget with scrollbar
+        text_frame = tk.Frame(info_window)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        scrollbar = tk.Scrollbar(text_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        text_widget = tk.Text(text_frame, wrap=tk.WORD, yscrollcommand=scrollbar.set)
+        text_widget.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=text_widget.yview)
+        
+        # Insert CUDA information
+        text_widget.insert(tk.END, f"CUDA Acceleration: {'Enabled' if use_cuda else 'Disabled'}\n\n")
+        text_widget.insert(tk.END, f"Device Information:\n{cuda_info['device']}\n\n")
+        text_widget.insert(tk.END, "Performance will be displayed in real-time when debug mode is enabled.\n")
+        
+        # Make the text widget read-only
+        text_widget.config(state=tk.DISABLED)
+        
+        # Add a button to close the window
+        close_button = tk.Button(info_window, text="Close", command=info_window.destroy)
+        close_button.pack(pady=10)
 
 
 #def main():
