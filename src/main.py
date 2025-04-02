@@ -139,6 +139,10 @@ class CommunePredictorApp:
             self.update_suggestions()
         
     def create_widgets(self) -> None:
+        # Configure row and column weights to make the scrolling area expand
+        self.root.grid_rowconfigure(3, weight=1)  # Make the suggestions row expandable
+        self.root.grid_columnconfigure(0, weight=1)
+        
         # Row 0
         row = 0
         self.entry_var = tk.StringVar()
@@ -149,37 +153,54 @@ class CommunePredictorApp:
         
         # Row 1
         row = 1
+        options_frame = tk.Frame(self.root)
+        options_frame.grid(row=row, column=0, columnspan=4, padx=10, pady=5, sticky="ew")
+        
+        # Search options in options_frame
         self.search_type_var = tk.StringVar(value="Contenant")
-        search_type_menu = ttk.OptionMenu(self.root, self.search_type_var, "Contenant", "Commencant par", "Finissant par", "Contenant", command=self.update_suggestions)
-        search_type_menu.grid(row=row, column=0, padx=10, pady=10)
+        search_type_menu = ttk.OptionMenu(options_frame, self.search_type_var, "Contenant", 
+                                        "Commencant par", "Finissant par", "Contenant", 
+                                        command=self.update_suggestions)
+        search_type_menu.pack(side=tk.LEFT, padx=10)
 
         sort_types = ["Nom", "Longueur", "Département", "Distance"]
         self.sort_type_var = tk.StringVar(value="Nom (A-Z)")
-        sort_type_menu = ttk.OptionMenu(self.root, self.sort_type_var, *sort_types, command=self.update_suggestions)
-        sort_type_menu.grid(row=row, column=1, padx=10, pady=10)
+        sort_type_menu = ttk.OptionMenu(options_frame, self.sort_type_var, *sort_types, 
+                                    command=self.update_suggestions)
+        sort_type_menu.pack(side=tk.LEFT, padx=10)
 
-        self.sort_button = tk.Button(self.root, text="↑", command=self.toggle_sort_order)
-        self.sort_button.grid(row=row, column=2, padx=5, pady=10)
+        self.sort_button = tk.Button(options_frame, text="↑", command=self.toggle_sort_order)
+        self.sort_button.pack(side=tk.LEFT, padx=5)
         
         # Row 2
         row = 2
-        self.correction_checkbutton = ttk.Checkbutton(self.root, text="Correction", variable=self.correction_var, command=self.update_suggestions)
-        self.correction_checkbutton.grid(row=row, column=0, padx=10, pady=10)
-
-        self.france_checkbutton = ttk.Checkbutton(self.root, text="France", variable=self.france_var, command=self.update_combined_df)
-        self.france_checkbutton.grid(row=row, column=1, padx=10, pady=10)
-
-        self.allemagne_checkbutton = ttk.Checkbutton(self.root, text="Allemagne", variable=self.allemagne_var, command=self.update_combined_df)
-        self.allemagne_checkbutton.grid(row=row, column=2, padx=10, pady=10)
-
-        self.suisse_checkbutton = ttk.Checkbutton(self.root, text="Suisse", variable=self.suisse_var, command=self.update_combined_df)
-        self.suisse_checkbutton.grid(row=row, column=3, padx=10, pady=10)
-
+        checkboxes_frame = tk.Frame(self.root)
+        checkboxes_frame.grid(row=row, column=0, columnspan=4, padx=10, pady=5, sticky="ew")
         
-        # Row 3
+        self.correction_checkbutton = ttk.Checkbutton(checkboxes_frame, text="Correction", 
+                                                variable=self.correction_var, 
+                                                command=self.update_suggestions)
+        self.correction_checkbutton.pack(side=tk.LEFT, padx=10)
+
+        self.france_checkbutton = ttk.Checkbutton(checkboxes_frame, text="France", 
+                                            variable=self.france_var, 
+                                            command=self.update_combined_df)
+        self.france_checkbutton.pack(side=tk.LEFT, padx=10)
+
+        self.allemagne_checkbutton = ttk.Checkbutton(checkboxes_frame, text="Allemagne", 
+                                                variable=self.allemagne_var, 
+                                                command=self.update_combined_df)
+        self.allemagne_checkbutton.pack(side=tk.LEFT, padx=10)
+
+        self.suisse_checkbutton = ttk.Checkbutton(checkboxes_frame, text="Suisse", 
+                                            variable=self.suisse_var, 
+                                            command=self.update_combined_df)
+        self.suisse_checkbutton.pack(side=tk.LEFT, padx=10)
+        
+        # Row 3 - Suggestions area (expandable)
         row = 3
         suggestions_frame_container = tk.Frame(self.root)
-        suggestions_frame_container.grid(row=row, column=0, columnspan=3, padx=10, pady=5, sticky="nsew")
+        suggestions_frame_container.grid(row=row, column=0, columnspan=4, padx=10, pady=5, sticky="nsew")
 
         canvas = tk.Canvas(suggestions_frame_container)
         scrollbar = ttk.Scrollbar(suggestions_frame_container, orient="vertical", command=canvas.yview)
@@ -194,24 +215,21 @@ class CommunePredictorApp:
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Row 4
+        # Row 4 - Letters frame
         row = 4
         self.rowletters = row
+        self.letter_buttons_frame = tk.Frame(self.root)
+        self.letter_buttons_frame.grid(row=row, column=0, columnspan=4, pady=5, sticky="ew")
 
-        # Row 5
+        # Row 5 - Results count
         row = 5
         self.results_count_label = tk.Label(self.root, text="Page 0/0 Résultats: 0")
-        self.results_count_label.grid(row=row, column=0, columnspan=2, pady=5)
+        self.results_count_label.grid(row=row, column=0, columnspan=2, pady=5, sticky="w")
 
-        # Row 6
+        # Row 6 - Pagination
         row = 6
-        self.letter_buttons_frame = tk.Frame(self.root)
-        self.letter_buttons_frame.grid(row=row, column=0, columnspan=2, pady=5)
-
-        # Row 7
-        row = 7
         pagination_frame = tk.Frame(self.root)
-        pagination_frame.grid(row=row, column=0, columnspan=2, pady=5)
+        pagination_frame.grid(row=row, column=0, columnspan=4, pady=5, sticky="ew")
 
         self.prev_page_button = tk.Button(pagination_frame, text="<-", command=self.prev_page)
         self.prev_page_button.pack(side=tk.LEFT, padx=5)
@@ -225,9 +243,11 @@ class CommunePredictorApp:
         self.decrease_results_button = tk.Button(pagination_frame, text="-", command=self.decrease_results_per_page)
         self.decrease_results_button.pack(side=tk.LEFT, padx=5)
 
-        # Make the suggestions frame expand with the window
-        self.root.grid_rowconfigure(1, weight=1)
-        self.root.grid_columnconfigure(0, weight=1)
+        # Set minimum window size
+        self.root.update()
+        self.root.minsize(width=self.root.winfo_width(), height=400)
+        
+        # Set initial focus
         self.entry.focus_set()
     
     def search_communes(self, query: str, search_type: str) -> pd.DataFrame:
