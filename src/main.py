@@ -91,14 +91,21 @@ class CommunePredictorApp:
         
         # Convert names to ctypes array
         names_ctypes = (ctypes.c_char_p * names_count)(*map(lambda x: x.encode('utf-8'), names))
-        distances = (ctypes.c_size_t * max_suggestions)()
+        distances = (ctypes.c_size_t * names_count)()  # Change to store all distances
         
-        # Call the C function
-        functions_lib.calculate_distances(names_ctypes, names_count, query.encode('utf-8'), distances, min_distance, max_suggestions)
+        # Call the C function - modify to calculate distances for all names
+        functions_lib.calculate_final_distances(names_ctypes, names_count, query.encode('utf-8'), distances)
+        
+        # Create a list of tuples (distance, pays, name, dep_code)
+        distance_items = [(distances[i], pays[i], names[i], dep_codes[i]) for i in range(names_count)]
+        
+        # Sort by distance and take max_suggestions items with distance < min_distance
+        distance_items.sort(key=lambda x: x[0])
+        filtered_items = [item for item in distance_items if item[0] < min_distance][:max_suggestions]
+        
         # Collect results
-        results = []
-        for i in range(max_suggestions):
-                results.append((pays[i], names[i], dep_codes[i]))
+        results = [(item[1], item[2], item[3]) for item in filtered_items]
+        
         additional_results_df = pd.DataFrame(results, columns=['Pays', 'nom_standard', 'dep_code'])
         return additional_results_df[['Pays', 'nom_standard', 'dep_code']]
 
