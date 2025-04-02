@@ -127,7 +127,7 @@ __global__ void filter_kernel(const char* d_strings, const char* d_strings_sans_
 // Host helper functions to manage device memory and call kernels
 
 // GPU implementation of levenshtein_n
-extern "C" size_t cuda_levenshtein_n(const char *a, const size_t length, const char *b, const size_t bLength) {
+extern "C" __declspec(dllexport) size_t cuda_levenshtein_n(const char *a, const size_t length, const char *b, const size_t bLength) {
     // Handle base cases
     if (a == b) return 0;
     if (!length) return bLength;
@@ -248,7 +248,7 @@ extern "C" void cuda_calculate_distances(const char **names, size_t names_count,
 }
 
 // GPU implementation of calculate_final_distances
-extern "C" void cuda_calculate_final_distances(const char **names, size_t names_count, const char *query, size_t *distances) {
+extern "C" __declspec(dllexport) void cuda_calculate_final_distances(const char **names, size_t names_count, const char *query, size_t *distances) {
     // Prepare data similar to cuda_calculate_distances
     size_t query_len = strlen(query);
     
